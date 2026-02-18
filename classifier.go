@@ -17,9 +17,10 @@ type Classifier struct {
 	labels       []string
 	topK         int
 	minConf      float32
-	dynamicBatch bool
-	mu           sync.Mutex
-	closeOnce    sync.Once
+	dynamicBatch  bool
+	ownsSessOpts  bool
+	mu            sync.Mutex
+	closeOnce     sync.Once
 
 	// Pre-allocated for single-segment inference.
 	inputTensor   *ort.Tensor[float32]
@@ -45,73 +46,89 @@ func NewClassifier(opts ...Option) (*Classifier, error) {
 		}
 	}
 
-	// Validate required fields.
 	if cfg.modelPath == "" {
 		return nil, ErrModelPath
 	}
 
-	// Load labels from one of three sources.
-	var labels []string
-	var err error
-	switch {
-	case len(cfg.labels) > 0:
-		labels = cfg.labels
-	case cfg.labelsPath != "":
-		labels, err = LoadLabels(cfg.labelsPath)
-		if err != nil {
-			return nil, fmt.Errorf("birdnet: loading labels from file: %w", err)
-		}
-	case cfg.labelsReader != nil:
-		labels, err = LoadLabelsFromReader(cfg.labelsReader, cfg.labelsFormat)
-		if err != nil {
-			return nil, fmt.Errorf("birdnet: loading labels from reader: %w", err)
-		}
-	default:
-		return nil, ErrLabelsRequired
-	}
-
-	// Detect model type.
-	detectedConfig, err := DetectModelType(cfg.modelPath)
+	labels, err := resolveLabels(&cfg)
 	if err != nil {
-		return nil, fmt.Errorf("birdnet: detecting model type: %w", err)
+		return nil, err
 	}
 
-	// If the user explicitly set a model type, override the detected type and
-	// PreSigmoided flag but keep the detected NumSpecies and EmbeddingDim.
-	if cfg.modelType != nil {
-		mt := *cfg.modelType
-		detectedConfig.ModelType = mt
-		// Derive PreSigmoided from the overridden model type.
-		detectedConfig.PreSigmoided = (mt == ModelTypeBSGFinland)
-		// Update sample rate / duration / sample count to match the override.
-		switch mt {
-		case ModelTypeBirdNetV24, ModelTypeBSGFinland:
-			detectedConfig.SampleRate = 48000
-			detectedConfig.Duration = 3.0
-			detectedConfig.SampleCount = SampleCountV24
-		case ModelTypeBirdNetV30:
-			detectedConfig.SampleRate = 32000
-			detectedConfig.Duration = 5.0
-			detectedConfig.SampleCount = SampleCountV30
-		case ModelTypePerchV2:
-			detectedConfig.SampleRate = 32000
-			detectedConfig.Duration = 5.0
-			detectedConfig.SampleCount = SampleCountPerch
-		}
-	}
-
-	// Validate label count against model output dimension.
-	if len(labels) != detectedConfig.NumSpecies {
-		return nil, fmt.Errorf("%w: got %d labels, model expects %d",
-			ErrLabelCount, len(labels), detectedConfig.NumSpecies)
-	}
-
-	// Get input/output info from the model file for tensor names and shapes.
 	ortInputs, ortOutputs, err := ort.GetInputOutputInfo(cfg.modelPath)
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: reading model info: %w", err)
 	}
 
+	detectedConfig, err := detectModelTypeFromInfo(ortInputs, ortOutputs)
+	if err != nil {
+		return nil, fmt.Errorf("birdnet: detecting model type: %w", err)
+	}
+
+	applyModelTypeOverride(&detectedConfig, cfg.modelType)
+
+	if len(labels) != detectedConfig.NumSpecies {
+		return nil, fmt.Errorf("%w: got %d labels, model expects %d",
+			ErrLabelCount, len(labels), detectedConfig.NumSpecies)
+	}
+
+	return buildClassifier(&cfg, &detectedConfig, labels, ortInputs, ortOutputs)
+}
+
+// resolveLabels loads labels from whichever source was configured.
+func resolveLabels(cfg *classifierConfig) ([]string, error) {
+	switch {
+	case len(cfg.labels) > 0:
+		return cfg.labels, nil
+	case cfg.labelsPath != "":
+		labels, err := LoadLabels(cfg.labelsPath)
+		if err != nil {
+			return nil, fmt.Errorf("birdnet: loading labels from file: %w", err)
+		}
+		return labels, nil
+	case cfg.labelsReader != nil:
+		labels, err := LoadLabelsFromReader(cfg.labelsReader, cfg.labelsFormat)
+		if err != nil {
+			return nil, fmt.Errorf("birdnet: loading labels from reader: %w", err)
+		}
+		return labels, nil
+	default:
+		return nil, ErrLabelsRequired
+	}
+}
+
+// applyModelTypeOverride applies a user-specified model type override to the detected config.
+func applyModelTypeOverride(cfg *ModelConfig, mt *ModelType) {
+	if mt == nil {
+		return
+	}
+	overrideType := *mt
+	cfg.ModelType = overrideType
+	cfg.PreSigmoided = (overrideType == ModelTypeBSGFinland)
+
+	switch overrideType {
+	case ModelTypeBirdNetV24, ModelTypeBSGFinland:
+		cfg.SampleRate = sampleRate48k
+		cfg.Duration = duration3s
+		cfg.SampleCount = SampleCountV24
+	case ModelTypeBirdNetV30:
+		cfg.SampleRate = sampleRate32k
+		cfg.Duration = duration5s
+		cfg.SampleCount = SampleCountV30
+	case ModelTypePerchV2:
+		cfg.SampleRate = sampleRate32k
+		cfg.Duration = duration5s
+		cfg.SampleCount = SampleCountPerch
+	}
+}
+
+// buildClassifier creates the ONNX session and assembles the Classifier.
+func buildClassifier(
+	cfg *classifierConfig,
+	modelCfg *ModelConfig,
+	labels []string,
+	ortInputs, ortOutputs []ort.InputOutputInfo,
+) (*Classifier, error) {
 	inputNames := make([]string, len(ortInputs))
 	for i, info := range ortInputs {
 		inputNames[i] = info.Name
@@ -121,7 +138,6 @@ func NewClassifier(opts ...Option) (*Classifier, error) {
 		outputNames[i] = info.Name
 	}
 
-	// Check dynamic batch support from input shapes.
 	inputInfos := make([]tensorInfo, len(ortInputs))
 	for i, info := range ortInputs {
 		inputInfos[i] = tensorInfo{
@@ -131,49 +147,38 @@ func NewClassifier(opts ...Option) (*Classifier, error) {
 	}
 	dynBatch := dynamicBatchSupported(inputInfos)
 
-	// Create or reuse session options.
-	sessOpts := cfg.sessionOpts
-	ownsSessOpts := false
-	if sessOpts == nil {
-		sessOpts, err = ort.NewSessionOptions()
-		if err != nil {
-			return nil, fmt.Errorf("birdnet: creating session options: %w", err)
+	sessOpts, ownsSessOpts, err := resolveSessionOpts(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cleanup := func() {
+		if ownsSessOpts {
+			_ = sessOpts.Destroy()
 		}
-		ownsSessOpts = true
 	}
 
-	// Apply execution providers.
 	for _, p := range cfg.providers {
 		if err := p.setup(sessOpts); err != nil {
-			if ownsSessOpts {
-				sessOpts.Destroy()
-			}
+			cleanup()
 			return nil, fmt.Errorf("birdnet: setting up %s provider: %w", p.name, err)
 		}
 	}
 
-	// Create pre-allocated input tensor: shape [1, sampleCount].
 	inputTensor, err := ort.NewEmptyTensor[float32](
-		ort.NewShape(1, int64(detectedConfig.SampleCount)),
+		ort.NewShape(1, int64(modelCfg.SampleCount)),
 	)
 	if err != nil {
-		if ownsSessOpts {
-			sessOpts.Destroy()
-		}
+		cleanup()
 		return nil, fmt.Errorf("birdnet: creating input tensor: %w", err)
 	}
 
-	// Create pre-allocated output tensors based on model type.
-	outputTensors, err := createOutputTensors(detectedConfig, ortOutputs)
+	outputTensors, err := createOutputTensors(*modelCfg, ortOutputs)
 	if err != nil {
-		inputTensor.Destroy()
-		if ownsSessOpts {
-			sessOpts.Destroy()
-		}
+		_ = inputTensor.Destroy()
+		cleanup()
 		return nil, fmt.Errorf("birdnet: creating output tensors: %w", err)
 	}
 
-	// Build Value slices for the AdvancedSession constructor.
 	inputs := []ort.Value{inputTensor}
 	outputs := make([]ort.Value, len(outputTensors))
 	for i, t := range outputTensors {
@@ -184,23 +189,20 @@ func NewClassifier(opts ...Option) (*Classifier, error) {
 		cfg.modelPath, inputNames, outputNames, inputs, outputs, sessOpts,
 	)
 	if err != nil {
-		inputTensor.Destroy()
-		for _, t := range outputTensors {
-			t.Destroy()
-		}
-		if ownsSessOpts {
-			sessOpts.Destroy()
-		}
+		_ = inputTensor.Destroy()
+		destroyTensors(outputTensors)
+		cleanup()
 		return nil, fmt.Errorf("birdnet: creating ONNX session: %w", err)
 	}
 
 	return &Classifier{
 		session:       session,
-		config:        detectedConfig,
+		config:        *modelCfg,
 		labels:        labels,
 		topK:          cfg.topK,
 		minConf:       cfg.minConf,
 		dynamicBatch:  dynBatch,
+		ownsSessOpts:  ownsSessOpts,
 		inputTensor:   inputTensor,
 		outputTensors: outputTensors,
 		sessionOpts:   sessOpts,
@@ -210,61 +212,86 @@ func NewClassifier(opts ...Option) (*Classifier, error) {
 	}, nil
 }
 
+// resolveSessionOpts creates or reuses session options.
+func resolveSessionOpts(cfg *classifierConfig) (*ort.SessionOptions, bool, error) {
+	if cfg.sessionOpts != nil {
+		return cfg.sessionOpts, false, nil
+	}
+	opts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, false, fmt.Errorf("birdnet: creating session options: %w", err)
+	}
+	return opts, true, nil
+}
+
+// destroyTensors releases a slice of tensors, ignoring errors.
+func destroyTensors(tensors []*ort.Tensor[float32]) {
+	for _, t := range tensors {
+		_ = t.Destroy()
+	}
+}
+
 // createOutputTensors allocates the output tensors for a given model type.
 func createOutputTensors(cfg ModelConfig, ortOutputs []ort.InputOutputInfo) ([]*ort.Tensor[float32], error) {
 	switch cfg.ModelType {
 	case ModelTypeBirdNetV24, ModelTypeBSGFinland:
-		// 1 output: [1, numSpecies]
-		t, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(cfg.NumSpecies)))
-		if err != nil {
-			return nil, err
-		}
-		return []*ort.Tensor[float32]{t}, nil
+		return createSingleOutputTensor(cfg.NumSpecies)
 
 	case ModelTypeBirdNetV30:
-		// 2 outputs: [1, embeddingDim] and [1, numSpecies]
-		tEmbed, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(cfg.EmbeddingDim)))
-		if err != nil {
-			return nil, err
-		}
-		tSpecies, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(cfg.NumSpecies)))
-		if err != nil {
-			tEmbed.Destroy()
-			return nil, err
-		}
-		return []*ort.Tensor[float32]{tEmbed, tSpecies}, nil
+		return createEmbeddingAndSpeciesTensors(cfg.EmbeddingDim, cfg.NumSpecies)
 
 	case ModelTypePerchV2:
-		// 4 outputs: use shapes from the ONNX model info.
-		if len(ortOutputs) < 4 {
-			return nil, fmt.Errorf("birdnet: Perch model requires 4 outputs, got %d", len(ortOutputs))
-		}
-		tensors := make([]*ort.Tensor[float32], 4)
-		for i := range 4 {
-			dims := ortOutputs[i].Dimensions
-			shape := make([]int64, len(dims))
-			for j, d := range dims {
-				if d <= 0 {
-					// Replace dynamic dimensions with 1 for single-segment inference.
-					shape[j] = 1
-				} else {
-					shape[j] = d
-				}
-			}
-			t, err := ort.NewEmptyTensor[float32](ort.NewShape(shape...))
-			if err != nil {
-				for k := range i {
-					tensors[k].Destroy()
-				}
-				return nil, err
-			}
-			tensors[i] = t
-		}
-		return tensors, nil
+		return createPerchOutputTensors(ortOutputs)
 
 	default:
 		return nil, fmt.Errorf("birdnet: unsupported model type %v", cfg.ModelType)
 	}
+}
+
+func createSingleOutputTensor(numSpecies int) ([]*ort.Tensor[float32], error) {
+	t, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(numSpecies)))
+	if err != nil {
+		return nil, err
+	}
+	return []*ort.Tensor[float32]{t}, nil
+}
+
+func createEmbeddingAndSpeciesTensors(embeddingDim, numSpecies int) ([]*ort.Tensor[float32], error) {
+	tEmbed, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(embeddingDim)))
+	if err != nil {
+		return nil, err
+	}
+	tSpecies, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(numSpecies)))
+	if err != nil {
+		_ = tEmbed.Destroy()
+		return nil, err
+	}
+	return []*ort.Tensor[float32]{tEmbed, tSpecies}, nil
+}
+
+func createPerchOutputTensors(ortOutputs []ort.InputOutputInfo) ([]*ort.Tensor[float32], error) {
+	if len(ortOutputs) < outputCountPerch {
+		return nil, fmt.Errorf("birdnet: Perch model requires %d outputs, got %d", outputCountPerch, len(ortOutputs))
+	}
+	tensors := make([]*ort.Tensor[float32], outputCountPerch)
+	for i := range outputCountPerch {
+		dims := ortOutputs[i].Dimensions
+		shape := make([]int64, len(dims))
+		for j, d := range dims {
+			if d <= 0 {
+				shape[j] = 1
+			} else {
+				shape[j] = d
+			}
+		}
+		t, err := ort.NewEmptyTensor[float32](ort.NewShape(shape...))
+		if err != nil {
+			destroyTensors(tensors[:i])
+			return nil, err
+		}
+		tensors[i] = t
+	}
+	return tensors, nil
 }
 
 // Predict runs inference on a single audio segment and returns the prediction result.
@@ -280,10 +307,8 @@ func (c *Classifier) Predict(ctx context.Context, segment []float32) (*Predictio
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Copy segment data into the pre-allocated input tensor.
 	copy(c.inputTensor.GetData(), segment)
 
-	// Run inference, respecting context cancellation if applicable.
 	if err := c.runSession(ctx); err != nil {
 		return nil, fmt.Errorf("birdnet: running inference: %w", err)
 	}
@@ -294,40 +319,33 @@ func (c *Classifier) Predict(ctx context.Context, segment []float32) (*Predictio
 // runSession runs the ONNX session, optionally with context cancellation support.
 // The caller must hold c.mu.
 func (c *Classifier) runSession(ctx context.Context) error {
-	// Fast path: context.Background() or context.TODO() with no deadline/cancel.
 	_, hasDeadline := ctx.Deadline()
 	if !hasDeadline && ctx.Done() == nil {
 		return c.session.Run()
 	}
 
-	// Cancellable path: use RunOptions with a goroutine watching ctx.Done().
 	runOpts, err := ort.NewRunOptions()
 	if err != nil {
 		return fmt.Errorf("creating run options: %w", err)
 	}
 
-	// Watch for cancellation in a separate goroutine.
-	// The goroutine signals exited when it is completely done, so we can
-	// safely destroy runOpts only after the goroutine has exited.
 	done := make(chan struct{})
 	exited := make(chan struct{})
 	go func() {
 		defer close(exited)
 		select {
 		case <-ctx.Done():
-			runOpts.Terminate()
+			_ = runOpts.Terminate()
 		case <-done:
 		}
 	}()
 
 	runErr := c.session.RunWithOptions(runOpts)
 
-	// Signal the watcher goroutine to stop, then wait for it to exit
-	// before destroying runOpts to avoid a Terminate/Destroy race.
 	close(done)
 	<-exited
 
-	runOpts.Destroy()
+	_ = runOpts.Destroy()
 
 	return runErr
 }
@@ -335,24 +353,26 @@ func (c *Classifier) runSession(ctx context.Context) error {
 // buildResult constructs a PredictionResult from the current output tensor data.
 // The caller must hold c.mu.
 func (c *Classifier) buildResult() *PredictionResult {
-	var logits []float32
-	var embeddings []float32
+	logits, embeddings := c.extractOutputs()
+	return c.assemblePredictionResult(logits, embeddings)
+}
 
+// extractOutputs reads logit and embedding slices from the output tensors.
+func (c *Classifier) extractOutputs() (logits, embeddings []float32) {
 	switch c.config.ModelType {
 	case ModelTypeBirdNetV24, ModelTypeBSGFinland:
 		logits = c.outputTensors[0].GetData()
-	case ModelTypeBirdNetV30:
-		embeddings = c.outputTensors[0].GetData()
-		logits = c.outputTensors[1].GetData()
-	case ModelTypePerchV2:
+	case ModelTypeBirdNetV30, ModelTypePerchV2:
 		embeddings = c.outputTensors[0].GetData()
 		logits = c.outputTensors[1].GetData()
 	}
+	return logits, embeddings
+}
 
-	// Get top-K predictions.
+// assemblePredictionResult builds a PredictionResult from raw logits and embeddings.
+func (c *Classifier) assemblePredictionResult(logits, embeddings []float32) *PredictionResult {
 	predictions := TopKPredictions(logits, c.labels, c.topK, c.minConf, c.config.PreSigmoided)
 
-	// Compute raw scores (all species after activation).
 	rawScores := make([]float32, len(logits))
 	if c.config.PreSigmoided {
 		copy(rawScores, logits)
@@ -362,7 +382,6 @@ func (c *Classifier) buildResult() *PredictionResult {
 		}
 	}
 
-	// Copy embeddings if present (don't retain a reference to tensor buffer).
 	var embeddingsCopy []float32
 	if len(embeddings) > 0 {
 		embeddingsCopy = make([]float32, len(embeddings))
@@ -381,7 +400,6 @@ func (c *Classifier) buildResult() *PredictionResult {
 // If the model supports dynamic batching, segments are processed in a single
 // inference pass. Otherwise, they are processed sequentially.
 func (c *Classifier) PredictBatch(ctx context.Context, segments [][]float32) ([]*PredictionResult, error) {
-	// Validate all segments first.
 	for i, seg := range segments {
 		if len(seg) != c.config.SampleCount {
 			return nil, fmt.Errorf("%w: segment %d has %d samples, expected %d",
@@ -393,7 +411,6 @@ func (c *Classifier) PredictBatch(ctx context.Context, segments [][]float32) ([]
 		return []*PredictionResult{}, nil
 	}
 
-	// If dynamic batch is not supported, fall back to sequential processing.
 	if !c.dynamicBatch {
 		return c.predictSequential(ctx, segments)
 	}
@@ -426,7 +443,6 @@ func (c *Classifier) predictDynamicBatch(ctx context.Context, segments [][]float
 	batchSize := len(segments)
 	sampleCount := c.config.SampleCount
 
-	// Lazily create the batch session.
 	if c.batchSession == nil {
 		var err error
 		c.batchSession, err = ort.NewDynamicAdvancedSession(
@@ -437,7 +453,6 @@ func (c *Classifier) predictDynamicBatch(ctx context.Context, segments [][]float
 		}
 	}
 
-	// Create batch input tensor: [batchSize, sampleCount].
 	flatInput := make([]float32, batchSize*sampleCount)
 	for i, seg := range segments {
 		copy(flatInput[i*sampleCount:], seg)
@@ -448,37 +463,28 @@ func (c *Classifier) predictDynamicBatch(ctx context.Context, segments [][]float
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: creating batch input tensor: %w", err)
 	}
-	defer inputTensor.Destroy()
+	defer func() { _ = inputTensor.Destroy() }()
 
-	// Create batch output tensors.
 	outputTensors, err := c.createBatchOutputTensors(batchSize)
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: creating batch output tensors: %w", err)
 	}
-	defer func() {
-		for _, t := range outputTensors {
-			t.Destroy()
-		}
-	}()
+	defer func() { destroyTensors(outputTensors) }()
 
-	// Build Value slices.
 	inputs := []ort.Value{inputTensor}
 	outputs := make([]ort.Value, len(outputTensors))
 	for i, t := range outputTensors {
 		outputs[i] = t
 	}
 
-	// Check for cancellation before running inference.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	// Run inference.
 	if err := c.batchSession.Run(inputs, outputs); err != nil {
 		return nil, fmt.Errorf("birdnet: running batch inference: %w", err)
 	}
 
-	// Split results per segment.
 	return c.splitBatchResults(outputTensors, batchSize), nil
 }
 
@@ -500,13 +506,12 @@ func (c *Classifier) createBatchOutputTensors(batchSize int) ([]*ort.Tensor[floa
 		}
 		tSpecies, err := ort.NewEmptyTensor[float32](ort.NewShape(bs, int64(c.config.NumSpecies)))
 		if err != nil {
-			tEmbed.Destroy()
+			_ = tEmbed.Destroy()
 			return nil, err
 		}
 		return []*ort.Tensor[float32]{tEmbed, tSpecies}, nil
 
 	case ModelTypePerchV2:
-		// For Perch batch, use the single-segment output shapes but replace batch dim.
 		tensors := make([]*ort.Tensor[float32], len(c.outputTensors))
 		for i, st := range c.outputTensors {
 			origShape := st.GetShape()
@@ -517,9 +522,7 @@ func (c *Classifier) createBatchOutputTensors(batchSize int) ([]*ort.Tensor[floa
 			}
 			t, err := ort.NewEmptyTensor[float32](ort.NewShape(shape...))
 			if err != nil {
-				for k := range i {
-					tensors[k].Destroy()
-				}
+				destroyTensors(tensors[:i])
 				return nil, err
 			}
 			tensors[i] = t
@@ -538,48 +541,20 @@ func (c *Classifier) splitBatchResults(outputTensors []*ort.Tensor[float32], bat
 	embeddingDim := c.config.EmbeddingDim
 
 	for i := range batchSize {
-		var logits []float32
-		var embeddings []float32
+		var logits, embeddings []float32
 
 		switch c.config.ModelType {
 		case ModelTypeBirdNetV24, ModelTypeBSGFinland:
 			allLogits := outputTensors[0].GetData()
 			logits = allLogits[i*numSpecies : (i+1)*numSpecies]
-		case ModelTypeBirdNetV30:
-			allEmbed := outputTensors[0].GetData()
-			allLogits := outputTensors[1].GetData()
-			embeddings = allEmbed[i*embeddingDim : (i+1)*embeddingDim]
-			logits = allLogits[i*numSpecies : (i+1)*numSpecies]
-		case ModelTypePerchV2:
+		case ModelTypeBirdNetV30, ModelTypePerchV2:
 			allEmbed := outputTensors[0].GetData()
 			allLogits := outputTensors[1].GetData()
 			embeddings = allEmbed[i*embeddingDim : (i+1)*embeddingDim]
 			logits = allLogits[i*numSpecies : (i+1)*numSpecies]
 		}
 
-		predictions := TopKPredictions(logits, c.labels, c.topK, c.minConf, c.config.PreSigmoided)
-
-		rawScores := make([]float32, len(logits))
-		if c.config.PreSigmoided {
-			copy(rawScores, logits)
-		} else {
-			for j, v := range logits {
-				rawScores[j] = Sigmoid(v)
-			}
-		}
-
-		var embeddingsCopy []float32
-		if len(embeddings) > 0 {
-			embeddingsCopy = make([]float32, len(embeddings))
-			copy(embeddingsCopy, embeddings)
-		}
-
-		results[i] = &PredictionResult{
-			ModelType:   c.config.ModelType,
-			Predictions: predictions,
-			Embeddings:  embeddingsCopy,
-			RawScores:   rawScores,
-		}
+		results[i] = c.assemblePredictionResult(logits, embeddings)
 	}
 
 	return results
@@ -590,19 +565,17 @@ func (c *Classifier) splitBatchResults(outputTensors []*ort.Tensor[float32], bat
 func (c *Classifier) Close() error {
 	c.closeOnce.Do(func() {
 		if c.session != nil {
-			c.session.Destroy()
+			_ = c.session.Destroy()
 		}
-		for _, t := range c.outputTensors {
-			t.Destroy()
-		}
+		destroyTensors(c.outputTensors)
 		if c.inputTensor != nil {
-			c.inputTensor.Destroy()
+			_ = c.inputTensor.Destroy()
 		}
 		if c.batchSession != nil {
-			c.batchSession.Destroy()
+			_ = c.batchSession.Destroy()
 		}
-		if c.sessionOpts != nil {
-			c.sessionOpts.Destroy()
+		if c.sessionOpts != nil && c.ownsSessOpts {
+			_ = c.sessionOpts.Destroy()
 		}
 	})
 	return nil

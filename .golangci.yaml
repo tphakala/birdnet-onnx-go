@@ -1,0 +1,95 @@
+version: "2"
+output:
+  sort-order:
+    - linter
+    - severity
+    - file
+linters:
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - decorder
+    - dupl
+    - durationcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - forcetypeassert
+    - gocognit
+    - gosec
+    - goconst
+    - gocritic
+    - gocyclo
+    - iface
+    - ineffassign
+    - makezero
+    - mnd
+    - musttag
+    - nakedret
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    #- nolintlint
+    - prealloc
+    - predeclared
+    - recvcheck
+    - revive
+    - sloglint
+    - staticcheck
+    - testifylint
+    - thelper
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+  disable:
+    - unused
+  settings:
+    dupl:
+      threshold: 120
+    gocognit:
+      min-complexity: 20
+    gocritic:
+      disabled-checks:
+        - commentFormatting
+        - commentedOutCode
+      enabled-tags:
+        - style
+        - diagnostic
+        - performance
+      settings:
+        ruleguard:
+          rules: "rules/builtins.go,rules/crypto.go,rules/errors.go,rules/net.go,rules/random.go,rules/reflect.go,rules/runtime.go,rules/slices.go,rules/strings.go,rules/sync.go,rules/testing.go,rules/time.go"
+    gocyclo:
+      min-complexity: 15
+    revive:
+      rules:
+        - name: unused-parameter
+          disabled: true
+    gosec:
+      # Configure gosec for security scanning
+      excludes:
+        - G104  # Audit errors not checked (covered by errcheck)
+      severity: medium
+      confidence: medium
+    prealloc:
+      # Configure prealloc for slice optimization
+      simple: true
+      range-loops: true
+      for-loops: true
+    exhaustive:
+      # Check exhaustiveness of enum switch statements
+      default-signifies-exhaustive: true
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: true
+  new: false

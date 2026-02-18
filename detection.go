@@ -19,7 +19,11 @@ func DetectModelType(modelPath string) (ModelConfig, error) {
 	if err != nil {
 		return ModelConfig{}, fmt.Errorf("birdnet: reading ONNX model info: %w", err)
 	}
+	return detectModelTypeFromInfo(ortInputs, ortOutputs)
+}
 
+// detectModelTypeFromInfo detects model type from pre-fetched ONNX input/output info.
+func detectModelTypeFromInfo(ortInputs, ortOutputs []ort.InputOutputInfo) (ModelConfig, error) {
 	inputs := make([]tensorInfo, len(ortInputs))
 	for i, info := range ortInputs {
 		inputs[i] = tensorInfo{
@@ -74,38 +78,14 @@ func detectFromShapes(inputs, outputs []tensorInfo) (ModelConfig, error) {
 // matchModel attempts to match the model type from a known (sampleCount, outputCount) pair.
 func matchModel(sampleCount int64, outputCount int, outputs []tensorInfo) (ModelConfig, bool) {
 	switch {
-	case sampleCount == SampleCountV24 && outputCount == 1:
-		return ModelConfig{
-			ModelType:    ModelTypeBirdNetV24,
-			SampleRate:   48000,
-			Duration:     3.0,
-			SampleCount:  SampleCountV24,
-			NumSpecies:   lastDim(outputs[0]),
-			EmbeddingDim: 0,
-			PreSigmoided: false,
-		}, true
+	case sampleCount == SampleCountV24 && outputCount == outputCountV24:
+		return configV24(outputs), true
 
-	case sampleCount == SampleCountV30 && outputCount == 2:
-		return ModelConfig{
-			ModelType:    ModelTypeBirdNetV30,
-			SampleRate:   32000,
-			Duration:     5.0,
-			SampleCount:  SampleCountV30,
-			NumSpecies:   lastDim(outputs[1]),
-			EmbeddingDim: lastDim(outputs[0]),
-			PreSigmoided: false,
-		}, true
+	case sampleCount == SampleCountV30 && outputCount == outputCountV30:
+		return configV30(outputs), true
 
-	case sampleCount == SampleCountPerch && outputCount == 4:
-		return ModelConfig{
-			ModelType:    ModelTypePerchV2,
-			SampleRate:   32000,
-			Duration:     5.0,
-			SampleCount:  SampleCountPerch,
-			NumSpecies:   lastDim(outputs[1]),
-			EmbeddingDim: lastDim(outputs[0]),
-			PreSigmoided: false,
-		}, true
+	case sampleCount == SampleCountPerch && outputCount == outputCountPerch:
+		return configPerch(outputs), true
 
 	default:
 		return ModelConfig{}, false
@@ -115,45 +95,50 @@ func matchModel(sampleCount int64, outputCount int, outputs []tensorInfo) (Model
 // matchByOutputCount falls back to output count alone when input dimensions are dynamic.
 func matchByOutputCount(outputCount int, outputs []tensorInfo) (ModelConfig, bool) {
 	switch outputCount {
-	case 1:
-		return ModelConfig{
-			ModelType:    ModelTypeBirdNetV24,
-			SampleRate:   48000,
-			Duration:     3.0,
-			SampleCount:  SampleCountV24,
-			NumSpecies:   lastDim(outputs[0]),
-			EmbeddingDim: 0,
-			PreSigmoided: false,
-		}, true
-
-	case 2:
-		return ModelConfig{
-			ModelType:    ModelTypeBirdNetV30,
-			SampleRate:   32000,
-			Duration:     5.0,
-			SampleCount:  SampleCountV30,
-			NumSpecies:   lastDim(outputs[1]),
-			EmbeddingDim: lastDim(outputs[0]),
-			PreSigmoided: false,
-		}, true
-
-	case 4:
-		return ModelConfig{
-			ModelType:    ModelTypePerchV2,
-			SampleRate:   32000,
-			Duration:     5.0,
-			SampleCount:  SampleCountPerch,
-			NumSpecies:   lastDim(outputs[1]),
-			EmbeddingDim: lastDim(outputs[0]),
-			PreSigmoided: false,
-		}, true
-
+	case outputCountV24:
+		return configV24(outputs), true
+	case outputCountV30:
+		return configV30(outputs), true
+	case outputCountPerch:
+		return configPerch(outputs), true
 	default:
 		return ModelConfig{}, false
 	}
 }
 
-// dynamicBatchSupported checks if the model's input batch dimension is dynamic (<=0 or >1).
+func configV24(outputs []tensorInfo) ModelConfig {
+	return ModelConfig{
+		ModelType:   ModelTypeBirdNetV24,
+		SampleRate:  sampleRate48k,
+		Duration:    duration3s,
+		SampleCount: SampleCountV24,
+		NumSpecies:  lastDim(outputs[0]),
+	}
+}
+
+func configV30(outputs []tensorInfo) ModelConfig {
+	return ModelConfig{
+		ModelType:    ModelTypeBirdNetV30,
+		SampleRate:   sampleRate32k,
+		Duration:     duration5s,
+		SampleCount:  SampleCountV30,
+		NumSpecies:   lastDim(outputs[1]),
+		EmbeddingDim: lastDim(outputs[0]),
+	}
+}
+
+func configPerch(outputs []tensorInfo) ModelConfig {
+	return ModelConfig{
+		ModelType:    ModelTypePerchV2,
+		SampleRate:   sampleRate32k,
+		Duration:     duration5s,
+		SampleCount:  SampleCountPerch,
+		NumSpecies:   lastDim(outputs[1]),
+		EmbeddingDim: lastDim(outputs[0]),
+	}
+}
+
+// dynamicBatchSupported checks if the model's input batch dimension is dynamic (!=1).
 func dynamicBatchSupported(inputs []tensorInfo) bool {
 	if len(inputs) == 0 {
 		return false
@@ -162,7 +147,7 @@ func dynamicBatchSupported(inputs []tensorInfo) bool {
 	if len(dims) == 0 {
 		return false
 	}
-	return dims[0] <= 0 || dims[0] > 1
+	return dims[0] != 1
 }
 
 // lastDim returns the last dimension of a tensorInfo as an int, or 0 if the dimensions are empty.

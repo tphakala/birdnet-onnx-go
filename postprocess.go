@@ -20,10 +20,18 @@ type scoreEntry struct {
 // minHeap implements heap.Interface for scoreEntry, ordered by score ascending.
 type minHeap []scoreEntry
 
-func (h minHeap) Len() int            { return len(h) }
-func (h minHeap) Less(i, j int) bool   { return h[i].score < h[j].score }
-func (h minHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *minHeap) Push(x any)   { *h = append(*h, x.(scoreEntry)) }
+func (h *minHeap) Len() int            { return len(*h) }
+func (h *minHeap) Less(i, j int) bool  { return (*h)[i].score < (*h)[j].score }
+func (h *minHeap) Swap(i, j int)       { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
+
+func (h *minHeap) Push(x any) {
+	entry, ok := x.(scoreEntry)
+	if !ok {
+		return
+	}
+	*h = append(*h, entry)
+}
+
 func (h *minHeap) Pop() any {
 	old := *h
 	n := len(old)
@@ -38,18 +46,23 @@ func (h *minHeap) Pop() any {
 // sigmoid is skipped. Results below minConf are filtered out after activation.
 func TopKPredictions(scores []float32, labels []string, k int, minConf float32, preSigmoided bool) []Prediction {
 	n := len(scores)
-	if n == 0 || k <= 0 {
+	if n == 0 || k <= 0 || len(labels) == 0 {
 		return []Prediction{}
 	}
 	if k > n {
 		k = n
+	}
+	// Clamp to label count to avoid out-of-bounds access.
+	if len(labels) < n {
+		n = len(labels)
 	}
 
 	// Use a min-heap of size k to find the top-k raw scores.
 	h := &minHeap{}
 	heap.Init(h)
 
-	for i, s := range scores {
+	for i := range n {
+		s := scores[i]
 		if h.Len() < k {
 			heap.Push(h, scoreEntry{index: i, score: s})
 		} else if s > (*h)[0].score {
@@ -61,7 +74,11 @@ func TopKPredictions(scores []float32, labels []string, k int, minConf float32, 
 	// Build predictions from the heap entries.
 	results := make([]Prediction, 0, h.Len())
 	for h.Len() > 0 {
-		entry := heap.Pop(h).(scoreEntry)
+		popped := heap.Pop(h)
+		entry, ok := popped.(scoreEntry)
+		if !ok {
+			continue
+		}
 		var conf float32
 		if preSigmoided {
 			conf = entry.score

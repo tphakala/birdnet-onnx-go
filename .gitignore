@@ -23,6 +23,9 @@ coverage.out
 .DS_Store
 Thumbs.db
 
+# Plans
+docs/plans/
+
 # Audio test files
 *.wav
 *.mp3

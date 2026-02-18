@@ -2,13 +2,29 @@ package birdnet
 
 import "fmt"
 
-// Sample count constants define the expected number of float32 samples per audio segment
-// for each supported model type.
+// Audio configuration constants for each model family.
 const (
+	// Sample counts (expected number of float32 samples per audio segment).
 	SampleCountV24   = 144_000 // 48kHz * 3.0s
 	SampleCountV30   = 160_000 // 32kHz * 5.0s
 	SampleCountPerch = 160_000 // 32kHz * 5.0s
 	SampleCountBSG   = 144_000 // 48kHz * 3.0s
+
+	// Sample rates in Hz.
+	sampleRate48k = 48_000
+	sampleRate32k = 32_000
+
+	// Audio segment durations in seconds.
+	duration3s = 3.0
+	duration5s = 5.0
+
+	// Expected output tensor counts per model type.
+	outputCountV24   = 1
+	outputCountV30   = 2
+	outputCountPerch = 4
+
+	// Default top-K value for predictions.
+	defaultTopK = 10
 )
 
 // ModelType identifies which ONNX model variant is in use.

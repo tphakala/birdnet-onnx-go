@@ -11,6 +11,13 @@ import (
 	"strings"
 )
 
+// Label format constants used by LoadLabelsFromReader and detectFormat.
+const (
+	FormatText = "text"
+	FormatCSV  = "csv"
+	FormatJSON = "json"
+)
+
 // LoadLabels reads a label file and returns labels as a string slice.
 // The format is auto-detected from the file extension and content:
 //   - .json -> JSON array of strings
@@ -22,7 +29,7 @@ func LoadLabels(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: open label file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	format := detectFormat(path, f)
 
@@ -39,11 +46,11 @@ func LoadLabels(path string) ([]string, error) {
 // This is useful when labels are embedded with go:embed.
 func LoadLabelsFromReader(r io.Reader, format string) ([]string, error) {
 	switch strings.ToLower(format) {
-	case "text":
+	case FormatText:
 		return loadText(r)
-	case "csv":
+	case FormatCSV:
 		return loadCSV(r)
-	case "json":
+	case FormatJSON:
 		return loadJSON(r)
 	default:
 		return nil, fmt.Errorf("birdnet: unsupported label format %q", format)
@@ -56,9 +63,9 @@ func detectFormat(path string, r io.ReadSeeker) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".json":
-		return "json"
+		return FormatJSON
 	case ".csv":
-		return "csv"
+		return FormatCSV
 	}
 
 	// Sniff the first line to decide between CSV and plain text.
@@ -66,18 +73,19 @@ func detectFormat(path string, r io.ReadSeeker) string {
 	if scanner.Scan() {
 		line := scanner.Text()
 		if looksLikeCSV(line) {
-			return "csv"
+			return FormatCSV
 		}
 	}
-	return "text"
+	return FormatText
 }
 
-// looksLikeCSV returns true if the line contains delimiters that split it into
-// multiple fields, suggesting CSV content.
+// looksLikeCSV returns true if the line contains enough delimiters to suggest
+// CSV content (at least 2 delimiters, implying 3+ fields). A single comma or
+// semicolon in a species name (e.g. "Parus major, Great Tit") would not trigger.
 func looksLikeCSV(line string) bool {
 	semicolons := strings.Count(line, ";")
 	commas := strings.Count(line, ",")
-	return semicolons >= 1 || commas >= 1
+	return semicolons >= 2 || commas >= 2
 }
 
 // loadText parses one-label-per-line format, skipping empty lines.

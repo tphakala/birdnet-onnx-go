@@ -7,11 +7,17 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+// Range filter model constants.
+const (
+	rangeFilterInputDims = 3  // lat, lon, week
+	maxWeeksPerYear      = 48 // number of weeks in the range filter calendar
+)
+
 // CalculateWeek converts a month and day to a week number in the range [1, 48].
 // The formula is: week = (month-1)*4 + (day-1)/7 + 1, clamped to [1, 48].
 func CalculateWeek(month, day int) float32 {
 	week := max((month-1)*4+(day-1)/7+1, 1)
-	week = min(week, 48)
+	week = min(week, maxWeeksPerYear)
 	return float32(week)
 }
 
@@ -50,18 +56,19 @@ func NewRangeFilter(modelPath string, labels []string) (*RangeFilter, error) {
 	if len(ortOutputs) == 0 {
 		return nil, fmt.Errorf("birdnet: range filter model has no outputs")
 	}
-	outputDims := ortOutputs[0].Dimensions
-	var numSpecies int64
-	if len(outputDims) >= 2 {
-		numSpecies = outputDims[1]
-	} else if len(outputDims) == 1 {
-		numSpecies = outputDims[0]
-	} else {
-		return nil, fmt.Errorf("birdnet: unexpected output shape in range filter model")
+	numSpecies, err := extractOutputSize(ortOutputs[0].Dimensions)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate label count against model output.
+	if int64(len(labels)) != numSpecies {
+		return nil, fmt.Errorf("%w: got %d labels, range filter model expects %d",
+			ErrLabelCount, len(labels), numSpecies)
 	}
 
 	// Create pre-allocated input tensor: shape [1, 3].
-	inputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(1, 3))
+	inputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(1, rangeFilterInputDims))
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: creating range filter input tensor: %w", err)
 	}
@@ -69,7 +76,7 @@ func NewRangeFilter(modelPath string, labels []string) (*RangeFilter, error) {
 	// Create pre-allocated output tensor: shape [1, numSpecies].
 	outputTensor, err := ort.NewEmptyTensor[float32](ort.NewShape(1, numSpecies))
 	if err != nil {
-		inputTensor.Destroy()
+		_ = inputTensor.Destroy()
 		return nil, fmt.Errorf("birdnet: creating range filter output tensor: %w", err)
 	}
 
@@ -80,8 +87,8 @@ func NewRangeFilter(modelPath string, labels []string) (*RangeFilter, error) {
 		modelPath, inputNames, outputNames, inputs, outputs, nil,
 	)
 	if err != nil {
-		inputTensor.Destroy()
-		outputTensor.Destroy()
+		_ = inputTensor.Destroy()
+		_ = outputTensor.Destroy()
 		return nil, fmt.Errorf("birdnet: creating range filter ONNX session: %w", err)
 	}
 
@@ -93,6 +100,27 @@ func NewRangeFilter(modelPath string, labels []string) (*RangeFilter, error) {
 	}, nil
 }
 
+// minOutputDims is the minimum number of dimensions needed to extract the species count
+// from the second axis of the output tensor (e.g. shape [1, numSpecies]).
+const minOutputDims = 2
+
+// extractOutputSize reads the species count from the output dimensions.
+func extractOutputSize(dims ort.Shape) (int64, error) {
+	var size int64
+	switch {
+	case len(dims) >= minOutputDims:
+		size = dims[1]
+	case len(dims) == 1:
+		size = dims[0]
+	default:
+		return 0, fmt.Errorf("birdnet: unexpected output shape in range filter model")
+	}
+	if size <= 0 {
+		return 0, fmt.Errorf("birdnet: invalid species count %d in range filter output shape %v", size, dims)
+	}
+	return size, nil
+}
+
 // GetSpeciesScores runs the range filter model and returns a score for each
 // species indicating presence likelihood at the given location and week.
 //
@@ -101,7 +129,7 @@ func (rf *RangeFilter) GetSpeciesScores(lat, lon, week float32) ([]float32, erro
 	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
 		return nil, fmt.Errorf("%w: lat=%v, lon=%v", ErrInvalidCoords, lat, lon)
 	}
-	if week < 1 || week > 48 {
+	if week < 1 || week > maxWeeksPerYear {
 		return nil, fmt.Errorf("%w: week=%v", ErrInvalidWeek, week)
 	}
 
@@ -132,13 +160,13 @@ func (rf *RangeFilter) GetSpeciesScores(lat, lon, week float32) ([]float32, erro
 func (rf *RangeFilter) Close() error {
 	rf.closeOnce.Do(func() {
 		if rf.session != nil {
-			rf.session.Destroy()
+			_ = rf.session.Destroy()
 		}
 		if rf.outputTensor != nil {
-			rf.outputTensor.Destroy()
+			_ = rf.outputTensor.Destroy()
 		}
 		if rf.inputTensor != nil {
-			rf.inputTensor.Destroy()
+			_ = rf.inputTensor.Destroy()
 		}
 	})
 	return nil
