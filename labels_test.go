@@ -110,3 +110,97 @@ func TestLoadLabelsTextEmptyLines(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, labels, 3, "empty lines should be skipped")
 }
+
+// --- Task 5: Label loading edge cases ---
+
+func TestDetectDelimiter(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    rune
+	}{
+		{"more semicolons", "idx;sci_name;com_name\n0;A;B", ';'},
+		{"more commas", "idx,sci_name,com_name\n0,A,B", ','},
+		{"equal count", "a,b;c\n", ','}, // comma default on tie
+		{"no delimiters", "simple text\n", ','},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detectDelimiter(tt.content))
+		})
+	}
+}
+
+func TestIsHeaderRow(t *testing.T) {
+	tests := []struct {
+		name string
+		row  []string
+		want bool
+	}{
+		{"known keyword idx", []string{"idx", "sci_name"}, true},
+		{"known keyword id", []string{"id", "name"}, true},
+		{"known keyword label", []string{"label", "other"}, true},
+		{"known keyword sci_name", []string{"sci_name", "com_name"}, true},
+		{"known keyword species", []string{"species", "family"}, true},
+		{"data row", []string{"Turdus merula", "Common Blackbird"}, false},
+		{"numeric first field", []string{"0", "species_a"}, false},
+		{"empty row", []string{}, false},
+		{"case insensitive", []string{"SCI_NAME", "COM_NAME"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isHeaderRow(tt.row))
+		})
+	}
+}
+
+func TestFindLabelColumn(t *testing.T) {
+	tests := []struct {
+		name   string
+		header []string
+		want   int
+	}{
+		{"sci_name takes priority", []string{"idx", "com_name", "sci_name"}, 2},
+		{"com_name when no sci_name", []string{"idx", "com_name", "family"}, 1},
+		{"fallback to 0", []string{"idx", "unknown_col"}, 0},
+		{"species column", []string{"idx", "species", "family"}, 1},
+		{"name column", []string{"idx", "name"}, 1},
+		{"label column", []string{"idx", "label"}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, findLabelColumn(tt.header))
+		})
+	}
+}
+
+func TestLoadLabelsCSVBOM(t *testing.T) {
+	// CSV content with UTF-8 BOM prefix
+	r := strings.NewReader("\xef\xbb\xbfidx;sci_name\n0;Species A\n1;Species B\n")
+	labels, err := LoadLabelsFromReader(r, FormatCSV)
+	require.NoError(t, err)
+	require.Len(t, labels, 2)
+	assert.Equal(t, "Species A", labels[0])
+}
+
+func TestLoadLabelsCSVSemicolon(t *testing.T) {
+	r := strings.NewReader("sci_name;com_name\nSpecies A;Common A\nSpecies B;Common B\n")
+	labels, err := LoadLabelsFromReader(r, FormatCSV)
+	require.NoError(t, err)
+	require.Len(t, labels, 2)
+	assert.Equal(t, "Species A", labels[0])
+	assert.Equal(t, "Species B", labels[1])
+}
+
+func TestLoadLabelsJSONMalformed(t *testing.T) {
+	r := strings.NewReader(`{"not": "an array"}`)
+	_, err := LoadLabelsFromReader(r, FormatJSON)
+	assert.Error(t, err)
+}
+
+func TestLoadLabelsCSVEmptyFile(t *testing.T) {
+	r := strings.NewReader("")
+	labels, err := LoadLabelsFromReader(r, FormatCSV)
+	require.NoError(t, err)
+	assert.Empty(t, labels)
+}

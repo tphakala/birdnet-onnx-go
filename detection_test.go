@@ -126,6 +126,67 @@ func TestDetectFromShapes(t *testing.T) {
 	}
 }
 
+// --- Task 6: Detection helper tests ---
+
+func TestLastDim(t *testing.T) {
+	tests := []struct {
+		name string
+		dims []int64
+		want int
+	}{
+		{"normal 2D", []int64{1, 6522}, 6522},
+		{"3D tensor", []int64{1, 1280, 100}, 100},
+		{"1D tensor", []int64{6522}, 6522},
+		{"empty dimensions", []int64{}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ti := tensorInfo{Name: "test", Dimensions: tt.dims}
+			assert.Equal(t, tt.want, lastDim(ti))
+		})
+	}
+}
+
+func TestConfigBuilders(t *testing.T) {
+	t.Run("configV24", func(t *testing.T) {
+		outputs := []tensorInfo{{Name: "output", Dimensions: []int64{1, 6522}}}
+		cfg := configV24(outputs)
+		assert.Equal(t, ModelTypeBirdNetV24, cfg.ModelType)
+		assert.Equal(t, sampleRate48k, cfg.SampleRate)
+		assert.InDelta(t, duration3s, cfg.Duration, 1e-9)
+		assert.Equal(t, SampleCountV24, cfg.SampleCount)
+		assert.Equal(t, 6522, cfg.NumSpecies)
+	})
+
+	t.Run("configV30", func(t *testing.T) {
+		outputs := []tensorInfo{
+			{Name: "embeddings", Dimensions: []int64{1, 1280}},
+			{Name: "logits", Dimensions: []int64{1, 6522}},
+		}
+		cfg := configV30(outputs)
+		assert.Equal(t, ModelTypeBirdNetV30, cfg.ModelType)
+		assert.Equal(t, sampleRate32k, cfg.SampleRate)
+		assert.InDelta(t, duration5s, cfg.Duration, 1e-9)
+		assert.Equal(t, SampleCountV30, cfg.SampleCount)
+		assert.Equal(t, 6522, cfg.NumSpecies)
+		assert.Equal(t, 1280, cfg.EmbeddingDim)
+	})
+
+	t.Run("configPerch", func(t *testing.T) {
+		outputs := []tensorInfo{
+			{Name: "emb", Dimensions: []int64{1, 1536}},
+			{Name: "logits", Dimensions: []int64{1, 10000}},
+		}
+		cfg := configPerch(outputs)
+		assert.Equal(t, ModelTypePerchV2, cfg.ModelType)
+		assert.Equal(t, sampleRate32k, cfg.SampleRate)
+		assert.InDelta(t, duration5s, cfg.Duration, 1e-9)
+		assert.Equal(t, SampleCountPerch, cfg.SampleCount)
+		assert.Equal(t, 10000, cfg.NumSpecies)
+		assert.Equal(t, 1536, cfg.EmbeddingDim)
+	})
+}
+
 func TestDynamicBatchSupported(t *testing.T) {
 	tests := []struct {
 		name   string

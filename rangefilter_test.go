@@ -23,7 +23,7 @@ func TestCalculateWeek(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CalculateWeek(tt.month, tt.day)
-			assert.Equal(t, tt.want, got)
+			assert.InDelta(t, tt.want, got, 1e-9)
 		})
 	}
 }
@@ -42,7 +42,34 @@ func TestCalculateWeekBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CalculateWeek(tt.month, tt.day)
-			assert.Equal(t, tt.want, got)
+			assert.InDelta(t, tt.want, got, 1e-9)
+		})
+	}
+}
+
+// --- Task 3: extractOutputSize tests ---
+
+func TestExtractOutputSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		dims    []int64
+		want    int64
+		wantErr bool
+	}{
+		{"2D shape [1, 500]", []int64{1, 500}, 500, false},
+		{"1D shape [500]", []int64{500}, 500, false},
+		{"empty shape", []int64{}, 0, true},
+		{"3D shape [1, 1, 500]", []int64{1, 1, 500}, 1, false}, // returns dims[1]
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := extractOutputSize(tt.dims)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.InDelta(t, tt.want, got, 1e-9)
 		})
 	}
 }

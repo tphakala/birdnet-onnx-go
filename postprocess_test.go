@@ -72,13 +72,13 @@ func TestTopKPredictionsPreSigmoided(t *testing.T) {
 	require.Len(t, results, 3)
 
 	assert.Equal(t, "sp1", results[0].Species)
-	assert.Equal(t, float32(0.95), results[0].Confidence)
+	assert.InDelta(t, float32(0.95), results[0].Confidence, 1e-6)
 
 	assert.Equal(t, "sp3", results[1].Species)
-	assert.Equal(t, float32(0.85), results[1].Confidence)
+	assert.InDelta(t, float32(0.85), results[1].Confidence, 1e-6)
 
 	assert.Equal(t, "sp4", results[2].Species)
-	assert.Equal(t, float32(0.5), results[2].Confidence)
+	assert.InDelta(t, float32(0.5), results[2].Confidence, 1e-6)
 }
 
 func TestTopKPredictionsEmptyInput(t *testing.T) {
@@ -87,4 +87,84 @@ func TestTopKPredictionsEmptyInput(t *testing.T) {
 
 	results = TopKPredictions(nil, nil, 3, 0.0, false)
 	assert.Empty(t, results)
+}
+
+// --- Task 4: Postprocess edge cases ---
+
+func TestTopKPredictionsEdgeCases(t *testing.T) {
+	scores5 := []float32{1.0, 2.0, 3.0, 4.0, 5.0}
+	labels5 := []string{"sp0", "sp1", "sp2", "sp3", "sp4"}
+
+	t.Run("k greater than n", func(t *testing.T) {
+		results := TopKPredictions(scores5, labels5, 100, 0.0, false)
+		assert.Len(t, results, 5)
+	})
+
+	t.Run("k equals zero", func(t *testing.T) {
+		results := TopKPredictions(scores5, labels5, 0, 0.0, false)
+		assert.Empty(t, results)
+	})
+
+	t.Run("k negative", func(t *testing.T) {
+		results := TopKPredictions(scores5, labels5, -1, 0.0, false)
+		assert.Empty(t, results)
+	})
+
+	t.Run("single score", func(t *testing.T) {
+		results := TopKPredictions([]float32{3.0}, []string{"only"}, 1, 0.0, false)
+		require.Len(t, results, 1)
+		assert.Equal(t, "only", results[0].Species)
+	})
+
+	t.Run("labels shorter than scores", func(t *testing.T) {
+		scores := []float32{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0}
+		labels := []string{"sp0", "sp1", "sp2", "sp3", "sp4"}
+		results := TopKPredictions(scores, labels, 3, 0.0, false)
+		// Should not panic and should only use indices within label bounds
+		for _, r := range results {
+			assert.NotEmpty(t, r.Species)
+		}
+	})
+
+	t.Run("all scores below minConf", func(t *testing.T) {
+		// Pre-sigmoided scores all below 0.5
+		results := TopKPredictions([]float32{0.1, 0.2, 0.3}, []string{"a", "b", "c"}, 3, 0.99, true)
+		assert.Empty(t, results)
+	})
+
+	t.Run("all scores identical", func(t *testing.T) {
+		scores := []float32{2.0, 2.0, 2.0, 2.0, 2.0}
+		labels := []string{"a", "b", "c", "d", "e"}
+		results := TopKPredictions(scores, labels, 3, 0.0, false)
+		assert.Len(t, results, 3)
+	})
+}
+
+func TestSigmoidProperties(t *testing.T) {
+	t.Run("output range 0 to 1", func(t *testing.T) {
+		inputs := []float32{-1000, -100, -10, -1, 0, 1, 10, 100, 1000}
+		for _, x := range inputs {
+			got := Sigmoid(x)
+			assert.GreaterOrEqual(t, got, float32(0.0), "Sigmoid(%v) should be >= 0", x)
+			assert.LessOrEqual(t, got, float32(1.0), "Sigmoid(%v) should be <= 1", x)
+		}
+	})
+
+	t.Run("monotonically increasing", func(t *testing.T) {
+		inputs := []float32{-10, -5, -1, 0, 1, 5, 10}
+		prev := Sigmoid(inputs[0])
+		for _, x := range inputs[1:] {
+			cur := Sigmoid(x)
+			assert.GreaterOrEqual(t, cur, prev, "Sigmoid should be monotonically increasing")
+			prev = cur
+		}
+	})
+
+	t.Run("symmetry around 0.5", func(t *testing.T) {
+		inputs := []float32{0.5, 1.0, 2.0, 5.0, 10.0}
+		for _, x := range inputs {
+			sum := Sigmoid(x) + Sigmoid(-x)
+			assert.InDelta(t, 1.0, sum, 1e-6, "Sigmoid(%v) + Sigmoid(%v) should be ~1.0", x, -x)
+		}
+	})
 }
