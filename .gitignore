@@ -1,0 +1,29 @@
+# Build artifacts
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Built CLI binaries in repo root
+/analyze-cli
+/birdnet-cli
+
+# Test artifacts
+coverage.out
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio test files
+*.wav
+*.mp3
+*.flac
