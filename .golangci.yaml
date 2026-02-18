@@ -61,11 +61,13 @@ linters:
       disabled-checks:
         - commentFormatting
         - commentedOutCode
-        - ruleguard
       enabled-tags:
         - style
         - diagnostic
         - performance
+      settings:
+        ruleguard:
+          rules: "rules/builtins.go,rules/crypto.go,rules/errors.go,rules/net.go,rules/random.go,rules/reflect.go,rules/runtime.go,rules/slices.go,rules/strings.go,rules/sync.go,rules/testing.go,rules/time.go"
     gocyclo:
       min-complexity: 15
     revive:
