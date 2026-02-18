@@ -57,7 +57,20 @@ func TopKPredictions(scores []float32, labels []string, k int, minConf float32, 
 		n = len(labels)
 	}
 
-	// Use a min-heap of size k to find the top-k raw scores.
+	h := topKHeap(scores, n, k)
+
+	results := collectPredictions(h, labels, minConf, preSigmoided)
+
+	// Sort descending by confidence.
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Confidence > results[j].Confidence
+	})
+
+	return results
+}
+
+// topKHeap builds a min-heap of the top-k raw scores from scores[:n].
+func topKHeap(scores []float32, n, k int) *minHeap {
 	h := &minHeap{}
 	heap.Init(h)
 
@@ -71,7 +84,11 @@ func TopKPredictions(scores []float32, labels []string, k int, minConf float32, 
 		}
 	}
 
-	// Build predictions from the heap entries.
+	return h
+}
+
+// collectPredictions drains the heap, applies activation, and filters by minConf.
+func collectPredictions(h *minHeap, labels []string, minConf float32, preSigmoided bool) []Prediction {
 	results := make([]Prediction, 0, h.Len())
 	for h.Len() > 0 {
 		popped := heap.Pop(h)
@@ -79,10 +96,8 @@ func TopKPredictions(scores []float32, labels []string, k int, minConf float32, 
 		if !ok {
 			continue
 		}
-		var conf float32
-		if preSigmoided {
-			conf = entry.score
-		} else {
+		conf := entry.score
+		if !preSigmoided {
 			conf = Sigmoid(entry.score)
 		}
 		if conf >= minConf {
@@ -93,11 +108,5 @@ func TopKPredictions(scores []float32, labels []string, k int, minConf float32, 
 			})
 		}
 	}
-
-	// Sort descending by confidence.
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Confidence > results[j].Confidence
-	})
-
 	return results
 }

@@ -25,7 +25,7 @@ const (
 //   - otherwise -> plain text (one label per line), with a content-sniff
 //     fallback to CSV if the first line looks like a delimited header.
 func LoadLabels(path string) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // LoadLabels intentionally opens caller-provided paths
 	if err != nil {
 		return nil, fmt.Errorf("birdnet: open label file: %w", err)
 	}
