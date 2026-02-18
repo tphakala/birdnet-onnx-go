@@ -1,8 +1,10 @@
 package birdnet
 
 import (
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCalculateWeek(t *testing.T) {
@@ -21,9 +23,7 @@ func TestCalculateWeek(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CalculateWeek(tt.month, tt.day)
-			if got != tt.want {
-				t.Errorf("CalculateWeek(%d, %d) = %v, want %v", tt.month, tt.day, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -42,9 +42,7 @@ func TestCalculateWeekBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := CalculateWeek(tt.month, tt.day)
-			if got != tt.want {
-				t.Errorf("CalculateWeek(%d, %d) = %v, want %v", tt.month, tt.day, got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -71,12 +69,8 @@ func TestGetSpeciesScoresValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := rf.GetSpeciesScores(tt.lat, tt.lon, tt.week)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("got error %v, want %v", err, tt.wantErr)
-			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }

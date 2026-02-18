@@ -1,8 +1,10 @@
 package birdnet
 
 import (
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDetectFromShapes(t *testing.T) {
@@ -18,8 +20,8 @@ func TestDetectFromShapes(t *testing.T) {
 			inputs:  []tensorInfo{{Name: "input", Dimensions: []int64{1, 144000}}},
 			outputs: []tensorInfo{{Name: "output", Dimensions: []int64{1, 6522}}},
 			want: ModelConfig{
-				ModelType: ModelTypeBirdNetV24, SampleRate: 48000, Duration: 3.0,
-				SampleCount: 144000, NumSpecies: 6522, EmbeddingDim: 0, PreSigmoided: false,
+				ModelType: ModelTypeBirdNetV24, SampleRate: sampleRate48k, Duration: duration3s,
+				SampleCount: SampleCountV24, NumSpecies: 6522,
 			},
 		},
 		{
@@ -30,8 +32,8 @@ func TestDetectFromShapes(t *testing.T) {
 				{Name: "logits", Dimensions: []int64{1, 6522}},
 			},
 			want: ModelConfig{
-				ModelType: ModelTypeBirdNetV30, SampleRate: 32000, Duration: 5.0,
-				SampleCount: 160000, NumSpecies: 6522, EmbeddingDim: 1280, PreSigmoided: false,
+				ModelType: ModelTypeBirdNetV30, SampleRate: sampleRate32k, Duration: duration5s,
+				SampleCount: SampleCountV30, NumSpecies: 6522, EmbeddingDim: 1280,
 			},
 		},
 		{
@@ -44,8 +46,8 @@ func TestDetectFromShapes(t *testing.T) {
 				{Name: "out4", Dimensions: []int64{1, 50}},
 			},
 			want: ModelConfig{
-				ModelType: ModelTypePerchV2, SampleRate: 32000, Duration: 5.0,
-				SampleCount: 160000, NumSpecies: 10000, EmbeddingDim: 1536, PreSigmoided: false,
+				ModelType: ModelTypePerchV2, SampleRate: sampleRate32k, Duration: duration5s,
+				SampleCount: SampleCountPerch, NumSpecies: 10000, EmbeddingDim: 1536,
 			},
 		},
 		{
@@ -56,8 +58,8 @@ func TestDetectFromShapes(t *testing.T) {
 				{Name: "logits", Dimensions: []int64{-1, 6522}},
 			},
 			want: ModelConfig{
-				ModelType: ModelTypeBirdNetV30, SampleRate: 32000, Duration: 5.0,
-				SampleCount: 160000, NumSpecies: 6522, EmbeddingDim: 1280, PreSigmoided: false,
+				ModelType: ModelTypeBirdNetV30, SampleRate: sampleRate32k, Duration: duration5s,
+				SampleCount: SampleCountV30, NumSpecies: 6522, EmbeddingDim: 1280,
 			},
 		},
 		{
@@ -65,8 +67,8 @@ func TestDetectFromShapes(t *testing.T) {
 			inputs:  []tensorInfo{{Name: "input", Dimensions: []int64{1, -1}}},
 			outputs: []tensorInfo{{Name: "output", Dimensions: []int64{1, 6522}}},
 			want: ModelConfig{
-				ModelType: ModelTypeBirdNetV24, SampleRate: 48000, Duration: 3.0,
-				SampleCount: 144000, NumSpecies: 6522, EmbeddingDim: 0, PreSigmoided: false,
+				ModelType: ModelTypeBirdNetV24, SampleRate: sampleRate48k, Duration: duration3s,
+				SampleCount: SampleCountV24, NumSpecies: 6522,
 			},
 		},
 		{
@@ -79,8 +81,8 @@ func TestDetectFromShapes(t *testing.T) {
 				{Name: "out4", Dimensions: []int64{1, 50}},
 			},
 			want: ModelConfig{
-				ModelType: ModelTypePerchV2, SampleRate: 32000, Duration: 5.0,
-				SampleCount: 160000, NumSpecies: 10000, EmbeddingDim: 1536, PreSigmoided: false,
+				ModelType: ModelTypePerchV2, SampleRate: sampleRate32k, Duration: duration5s,
+				SampleCount: SampleCountPerch, NumSpecies: 10000, EmbeddingDim: 1536,
 			},
 		},
 		{
@@ -101,6 +103,12 @@ func TestDetectFromShapes(t *testing.T) {
 			outputs: []tensorInfo{},
 			wantErr: ErrModelDetection,
 		},
+		{
+			name:    "empty input dimensions",
+			inputs:  []tensorInfo{{Name: "input", Dimensions: []int64{}}},
+			outputs: []tensorInfo{{Name: "output", Dimensions: []int64{1, 6522}}},
+			wantErr: ErrModelDetection,
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,19 +116,12 @@ func TestDetectFromShapes(t *testing.T) {
 			got, err := detectFromShapes(tt.inputs, tt.outputs)
 
 			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
-					t.Errorf("detectFromShapes() error = %v, wantErr %v", err, tt.wantErr)
-				}
+				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("detectFromShapes() unexpected error: %v", err)
-			}
-
-			if got != tt.want {
-				t.Errorf("detectFromShapes() =\n  %+v\nwant\n  %+v", got, tt.want)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -131,39 +132,16 @@ func TestDynamicBatchSupported(t *testing.T) {
 		inputs []tensorInfo
 		want   bool
 	}{
-		{
-			name:   "fixed batch 1",
-			inputs: []tensorInfo{{Name: "input", Dimensions: []int64{1, 144000}}},
-			want:   false,
-		},
-		{
-			name:   "dynamic batch -1",
-			inputs: []tensorInfo{{Name: "input", Dimensions: []int64{-1, 144000}}},
-			want:   true,
-		},
-		{
-			name:   "batch greater than 1",
-			inputs: []tensorInfo{{Name: "input", Dimensions: []int64{32, 144000}}},
-			want:   true,
-		},
-		{
-			name:   "empty inputs",
-			inputs: []tensorInfo{},
-			want:   false,
-		},
-		{
-			name:   "empty dimensions",
-			inputs: []tensorInfo{{Name: "input", Dimensions: []int64{}}},
-			want:   false,
-		},
+		{"fixed batch 1", []tensorInfo{{Name: "input", Dimensions: []int64{1, 144000}}}, false},
+		{"dynamic batch -1", []tensorInfo{{Name: "input", Dimensions: []int64{-1, 144000}}}, true},
+		{"batch greater than 1", []tensorInfo{{Name: "input", Dimensions: []int64{32, 144000}}}, true},
+		{"empty inputs", []tensorInfo{}, false},
+		{"empty dimensions", []tensorInfo{{Name: "input", Dimensions: []int64{}}}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := dynamicBatchSupported(tt.inputs)
-			if got != tt.want {
-				t.Errorf("dynamicBatchSupported() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, dynamicBatchSupported(tt.inputs))
 		})
 	}
 }

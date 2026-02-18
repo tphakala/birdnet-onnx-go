@@ -1,8 +1,9 @@
 package birdnet
 
 import (
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestModelTypeString(t *testing.T) {
@@ -19,10 +20,7 @@ func TestModelTypeString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			got := tt.mt.String()
-			if got != tt.want {
-				t.Errorf("ModelType(%d).String() = %q, want %q", int(tt.mt), got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.mt.String())
 		})
 	}
 }
@@ -30,14 +28,6 @@ func TestModelTypeString(t *testing.T) {
 func TestInputSizeError(t *testing.T) {
 	err := &InputSizeError{Expected: 144000, Got: 100}
 
-	// Verify error message contains expected and got values.
-	msg := err.Error()
-	if msg != "birdnet: input segment size mismatch: expected 144000 samples, got 100" {
-		t.Errorf("unexpected error message: %s", msg)
-	}
-
-	// Verify Unwrap returns ErrInputSize.
-	if !errors.Is(err, ErrInputSize) {
-		t.Error("InputSizeError should unwrap to ErrInputSize")
-	}
+	assert.Equal(t, "birdnet: input segment size mismatch: expected 144000 samples, got 100", err.Error())
+	assert.ErrorIs(t, err, ErrInputSize)
 }

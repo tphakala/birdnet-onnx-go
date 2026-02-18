@@ -1,26 +1,23 @@
 package birdnet
 
 import (
-	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewClassifierMissingModelPath(t *testing.T) {
 	_, err := NewClassifier(
 		WithLabels([]string{"sp1", "sp2"}),
 	)
-	if !errors.Is(err, ErrModelPath) {
-		t.Errorf("got %v, want ErrModelPath", err)
-	}
+	assert.ErrorIs(t, err, ErrModelPath)
 }
 
 func TestNewClassifierMissingLabels(t *testing.T) {
 	_, err := NewClassifier(
 		WithModelPath("nonexistent.onnx"),
 	)
-	if !errors.Is(err, ErrLabelsRequired) {
-		t.Errorf("got %v, want ErrLabelsRequired", err)
-	}
+	assert.ErrorIs(t, err, ErrLabelsRequired)
 }
 
 func TestNewClassifierEmptyModelPath(t *testing.T) {
@@ -28,16 +25,12 @@ func TestNewClassifierEmptyModelPath(t *testing.T) {
 		WithModelPath(""),
 		WithLabels([]string{"sp1"}),
 	)
-	if err == nil {
-		t.Fatal("expected error for empty model path, got nil")
-	}
+	assert.Error(t, err, "expected error for empty model path")
 }
 
 func TestNewClassifierNoOptions(t *testing.T) {
 	_, err := NewClassifier()
-	if !errors.Is(err, ErrModelPath) {
-		t.Errorf("got %v, want ErrModelPath", err)
-	}
+	assert.ErrorIs(t, err, ErrModelPath)
 }
 
 func TestNewClassifierModelPathOnlyNoLabels(t *testing.T) {
@@ -45,7 +38,5 @@ func TestNewClassifierModelPathOnlyNoLabels(t *testing.T) {
 	_, err := NewClassifier(
 		WithModelPath("some_model.onnx"),
 	)
-	if !errors.Is(err, ErrLabelsRequired) {
-		t.Errorf("got %v, want ErrLabelsRequired", err)
-	}
+	assert.ErrorIs(t, err, ErrLabelsRequired)
 }
