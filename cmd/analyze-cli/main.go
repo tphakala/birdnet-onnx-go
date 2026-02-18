@@ -21,11 +21,18 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+const (
+	defaultTopK    = 10
+	defaultMinConf = 0.01
+	bitDepth16     = 16
+	osDarwin       = "darwin"
+)
+
 func main() {
 	modelPath := flag.String("model", "", "path to ONNX model file (required)")
 	labelsPath := flag.String("labels", "", "path to labels file (required)")
-	topK := flag.Int("topk", 10, "number of top predictions per segment")
-	minConf := flag.Float64("min-conf", 0.01, "minimum confidence threshold")
+	topK := flag.Int("topk", defaultTopK, "number of top predictions per segment")
+	minConf := flag.Float64("min-conf", defaultMinConf, "minimum confidence threshold")
 	overlap := flag.Float64("overlap", 0.0, "overlap between segments in seconds")
 	ortLib := flag.String("ort-lib", "", "path to ONNX Runtime shared library (auto-detect if empty)")
 
@@ -56,7 +63,7 @@ func main() {
 	if err := ort.InitializeEnvironment(); err != nil {
 		log.Fatalf("Failed to initialize ONNX Runtime: %v", err)
 	}
-	defer ort.DestroyEnvironment()
+	defer func() { _ = ort.DestroyEnvironment() }()
 
 	// Create classifier.
 	c, err := birdnet.NewClassifier(
@@ -66,9 +73,9 @@ func main() {
 		birdnet.WithMinConfidence(float32(*minConf)),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create classifier: %v", err)
+		log.Fatalf("Failed to create classifier: %v", err) //nolint:gocritic // exitAfterDefer acceptable in CLI main
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	cfg := c.Config()
 	fmt.Printf("Model: %s  SampleRate: %d  Duration: %.1fs  Species: %d\n\n",
@@ -127,12 +134,12 @@ func processFile(ctx context.Context, c *birdnet.Classifier, cfg birdnet.ModelCo
 // loadWAV reads a 16-bit PCM WAV file and returns mono float32 samples
 // normalized to [-1.0, 1.0]. Stereo files are mixed to mono by averaging
 // channels. Other bit depths and float formats are not supported.
-func loadWAV(path string) ([]float32, int, error) {
-	f, err := os.Open(path)
+func loadWAV(path string) (samples []float32, sampleRate int, err error) {
+	f, err := os.Open(path) //nolint:gosec // path comes from CLI flag, not user-controlled input
 	if err != nil {
 		return nil, 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := wav.NewDecoder(f)
 
@@ -141,11 +148,11 @@ func loadWAV(path string) ([]float32, int, error) {
 		return nil, 0, fmt.Errorf("reading PCM data: %w", err)
 	}
 
-	if dec.BitDepth != 16 {
+	if dec.BitDepth != bitDepth16 {
 		return nil, 0, fmt.Errorf("%s: unsupported bit depth %d (only 16-bit PCM is supported)", path, dec.BitDepth)
 	}
 
-	sampleRate := int(dec.SampleRate)
+	sampleRate = int(dec.SampleRate)
 	numChannels := int(dec.NumChans)
 
 	const scale = 1.0 / 32768.0
@@ -153,7 +160,7 @@ func loadWAV(path string) ([]float32, int, error) {
 	intData := buf.Data
 	numFrames := len(intData) / numChannels
 
-	samples := make([]float32, numFrames)
+	samples = make([]float32, numFrames)
 	if numChannels == 1 {
 		for i := range numFrames {
 			samples[i] = float32(intData[i]) * scale
@@ -220,7 +227,7 @@ func findORTLibrary() string {
 	var candidates []string
 
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		candidates = []string{
 			"/usr/local/lib/libonnxruntime.dylib",
 			"/opt/homebrew/lib/libonnxruntime.dylib",
@@ -240,13 +247,13 @@ func findORTLibrary() string {
 
 	// Also check LD_LIBRARY_PATH / DYLD_LIBRARY_PATH entries.
 	envVar := "LD_LIBRARY_PATH"
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == osDarwin {
 		envVar = "DYLD_LIBRARY_PATH"
 	}
 	if paths := os.Getenv(envVar); paths != "" {
-		for _, dir := range strings.Split(paths, string(os.PathListSeparator)) {
+		for dir := range strings.SplitSeq(paths, string(os.PathListSeparator)) {
 			switch runtime.GOOS {
-			case "darwin":
+			case osDarwin:
 				candidates = append(candidates, dir+"/libonnxruntime.dylib")
 			case "linux":
 				candidates = append(candidates, dir+"/libonnxruntime.so")
