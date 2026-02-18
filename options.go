@@ -28,7 +28,7 @@ type classifierConfig struct {
 // defaultConfig returns a classifierConfig with sensible defaults.
 func defaultConfig() classifierConfig {
 	return classifierConfig{
-		topK:    10,
+		topK:    defaultTopK,
 		minConf: 0.0,
 	}
 }
@@ -63,7 +63,7 @@ func WithLabelsFromReader(r io.Reader, format string) Option {
 			return errors.New("birdnet: labels reader must not be nil")
 		}
 		switch format {
-		case "text", "csv", "json":
+		case FormatText, FormatCSV, FormatJSON:
 			// valid
 		default:
 			return fmt.Errorf("birdnet: unsupported labels format %q (want \"text\", \"csv\", or \"json\")", format)
@@ -105,12 +105,12 @@ func WithTopK(k int) Option {
 }
 
 // WithMinConfidence sets the minimum confidence threshold. Must be >= 0.
-func WithMinConfidence(min float32) Option {
+func WithMinConfidence(threshold float32) Option {
 	return func(c *classifierConfig) error {
-		if min < 0 {
-			return fmt.Errorf("birdnet: minConfidence must be >= 0, got %f", min)
+		if threshold < 0 {
+			return fmt.Errorf("birdnet: minConfidence must be >= 0, got %f", threshold)
 		}
-		c.minConf = min
+		c.minConf = threshold
 		return nil
 	}
 }
