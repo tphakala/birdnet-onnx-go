@@ -148,36 +148,24 @@ func TimerChannelLen(m dsl.Matcher) {
 // See: https://pkg.go.dev/time#Since
 // Note: Go 1.22 vet tool also warns about this pattern.
 func DeferredTimeSince(m dsl.Matcher) {
-	// Pattern: defer with time.Since as argument
+	// time.Since as first argument (with or without trailing args).
+	// Using alternatives in a single Match so ruleguard stops at the first hit.
 	m.Match(
 		`defer $fn(time.Since($start))`,
-	).
-		Report("time.Since($start) is evaluated at defer time, not function exit; wrap in func() to measure actual duration")
-
-	// Pattern: defer with time.Since as argument (multiple args)
-	m.Match(
 		`defer $fn(time.Since($start), $*args)`,
 	).
 		Report("time.Since($start) is evaluated at defer time, not function exit; wrap in func() to measure actual duration")
 
+	// time.Since as second argument (with or without trailing args).
 	m.Match(
 		`defer $fn($arg, time.Since($start))`,
-	).
-		Report("time.Since($start) is evaluated at defer time, not function exit; wrap in func() to measure actual duration")
-
-	m.Match(
-		`defer $fn($arg1, $arg2, time.Since($start))`,
-	).
-		Report("time.Since($start) is evaluated at defer time, not function exit; wrap in func() to measure actual duration")
-
-	// time.Since as second argument with trailing args
-	m.Match(
 		`defer $fn($arg, time.Since($start), $*args)`,
 	).
 		Report("time.Since($start) is evaluated at defer time, not function exit; wrap in func() to measure actual duration")
 
-	// time.Since as fourth argument (3 preceding args)
+	// time.Since as third or fourth argument.
 	m.Match(
+		`defer $fn($arg1, $arg2, time.Since($start))`,
 		`defer $fn($arg1, $arg2, $arg3, time.Since($start))`,
 	).
 		Report("time.Since($start) is evaluated at defer time, not function exit; wrap in func() to measure actual duration")
@@ -196,12 +184,10 @@ func DeferredTimeSince(m dsl.Matcher) {
 //
 // See: https://pkg.go.dev/time#Now
 func DeferredTimeNow(m dsl.Matcher) {
+	// Using alternatives in a single Match to avoid duplicate diagnostics
+	// when $*args matches zero arguments.
 	m.Match(
 		`defer $fn(time.Now())`,
-	).
-		Report("time.Now() is evaluated at defer time, not function exit; wrap in func() if you want exit time")
-
-	m.Match(
 		`defer $fn($*args, time.Now())`,
 	).
 		Report("time.Now() is evaluated at defer time, not function exit; wrap in func() if you want exit time")

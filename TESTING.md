@@ -61,7 +61,7 @@ Shared helpers reduce maintenance burden and ensure consistency. When you see a 
 
 Place shared helpers in `*_test_helpers_test.go` files within the same package:
 
-```
+```text
 internal/mypackage/
 ├── mypackage.go
 ├── mypackage_test.go
@@ -179,10 +179,8 @@ func TestParseConfig(t *testing.T) {
     }
 
     for _, tt := range tests {
-    for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             t.Parallel()
-            got, err := ParseConfig(tt.input)
             got, err := ParseConfig(tt.input)
 
             if tt.wantErr {

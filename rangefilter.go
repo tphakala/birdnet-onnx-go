@@ -106,14 +106,19 @@ const minOutputDims = 2
 
 // extractOutputSize reads the species count from the output dimensions.
 func extractOutputSize(dims ort.Shape) (int64, error) {
+	var size int64
 	switch {
 	case len(dims) >= minOutputDims:
-		return dims[1], nil
+		size = dims[1]
 	case len(dims) == 1:
-		return dims[0], nil
+		size = dims[0]
 	default:
 		return 0, fmt.Errorf("birdnet: unexpected output shape in range filter model")
 	}
+	if size <= 0 {
+		return 0, fmt.Errorf("birdnet: invalid species count %d in range filter output shape %v", size, dims)
+	}
+	return size, nil
 }
 
 // GetSpeciesScores runs the range filter model and returns a score for each

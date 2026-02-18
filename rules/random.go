@@ -63,7 +63,7 @@ func RandV2Migration(m dsl.Matcher) {
 	m.Match(
 		`rand.Seed($seed)`,
 	).
-		Report("rand.Seed is deprecated (Go 1.20+); global rand is auto-seeded; use rand.New(rand.NewSource($seed)) for reproducibility")
+		Report("rand.Seed is deprecated (Go 1.20+); global rand is auto-seeded; use rand.New(rand.NewPCG($seed, 0)) from math/rand/v2 for reproducibility")
 
 	// rand.Read is deprecated (Go 1.20+)
 	m.Match(
